@@ -1,18 +1,20 @@
 #include <ESP8266WiFi.h>
 #include <PubSubClient.h>
 
-// --- Configurações de Hardware (Pinos do NodeMCU) ---
-const int PINO_BUZZER = D1; // Atuador Sonoro
-const int PINO_LED    = D2; // Atuador Visual
-const int PINO_SENSOR = D5; // Sensor Reed Switch
+// --- Configurações de Hardware ---
+// D1: Ligado ao Módulo Relé (que liga a Bomba)
+const int PINO_BOMBA = D1; 
+// D2: Ligado ao pino Digital (DO) do Sensor de Umidade do Solo
+const int PINO_SENSOR = D2; 
 
 // --- Configurações de Rede ---
-const char* ssid = "NOME_DA_SUA_REDE";      // Coloque aqui o nome do Wi-Fi
-const char* password = "SENHA_DA_SUA_REDE"; // Coloque aqui a senha do Wi-Fi
+const char* ssid = "NOME_DA_SUA_REDE";      
+const char* password = "SENHA_DA_SUA_REDE"; 
 
 // --- Configurações MQTT ---
-const char* mqtt_server = "broker.hivemq.com"; // Broker público gratuito para testes
-const char* topico_status = "mackenzie/saude/remedio/status";
+const char* mqtt_server = "broker.hivemq.com"; 
+const char* topico_status = "mackenzie/irrigacao/status";
+const char* topico_comando = "mackenzie/irrigacao/comando";
 
 WiFiClient espClient;
 PubSubClient client(espClient);
@@ -20,14 +22,13 @@ PubSubClient client(espClient);
 void setup() {
   Serial.begin(115200);
   
-  // Configura os pinos
-  pinMode(PINO_BUZZER, OUTPUT);
-  pinMode(PINO_LED, OUTPUT);
-  pinMode(PINO_SENSOR, INPUT); // O resistor de 10k externo faz o pull-up/down
+  pinMode(PINO_BOMBA, OUTPUT);
+  pinMode(PINO_SENSOR, INPUT);
+  digitalWrite(PINO_BOMBA, HIGH); // Relés geralmente desligam no HIGH
 
-  // Inicializa
   setup_wifi();
   client.setServer(mqtt_server, 1883);
+  client.setCallback(callback);
 }
 
 void setup_wifi() {
@@ -36,17 +37,20 @@ void setup_wifi() {
   Serial.print("Conectando em ");
   Serial.println(ssid);
   WiFi.begin(ssid, password);
-  // Loop de espera até conectar (para demonstração)
+}
+
+void callback(char* topic, byte* payload, unsigned int length) {
+  // Aqui entraria a lógica para receber comandos manuais via MQTT
+  Serial.print("Mensagem recebida: ");
+  Serial.println(topic);
 }
 
 void reconnect() {
-  // Loop até reconectar no MQTT
   while (!client.connected()) {
     Serial.print("Tentando conexao MQTT...");
-    String clientId = "ESP8266Client-";
-    clientId += String(random(0xffff), HEX);
-    if (client.connect(clientId.c_str())) {
+    if (client.connect("ESP8266Irrigacao")) {
       Serial.println("conectado");
+      client.subscribe(topico_comando);
     } else {
       delay(5000);
     }
@@ -59,24 +63,20 @@ void loop() {
   }
   client.loop();
 
-  // --- Lógica do Projeto ---
-  // Lê o estado do sensor (1 = Aberto/Longe, 0 = Fechado/Perto)
-  int estadoSensor = digitalRead(PINO_SENSOR);
+  // Leitura do Sensor (1 = Seco, 0 = Úmido - depende da regulagem do sensor)
+  int soloSeco = digitalRead(PINO_SENSOR); 
 
-  if (estadoSensor == HIGH) {
-    // Caixa ABERTA (Ímã longe) - Paciente tomando remédio
-    digitalWrite(PINO_LED, LOW);    // Desliga LED
-    digitalWrite(PINO_BUZZER, LOW); // Desliga Buzzer
-    client.publish(topico_status, "CAIXA_ABERTA_REMEDIO_TOMADO");
-    Serial.println("Caixa Aberta");
+  if (soloSeco == HIGH) {
+    // Solo SECO -> Ligar Bomba
+    digitalWrite(PINO_BOMBA, LOW); // Liga o Relé (Low Trigger)
+    client.publish(topico_status, "SOLO_SECO_BOMBA_LIGADA");
+    Serial.println("Solo Seco - Irrigando...");
   } else {
-    // Caixa FECHADA (Ímã perto)
-    // Aqui entraria a lógica de horário. Para teste, vamos supor que está em alerta:
-    // digitalWrite(PINO_LED, HIGH);    // Liga LED
-    // digitalWrite(PINO_BUZZER, HIGH); // Liga Buzzer
-    client.publish(topico_status, "CAIXA_FECHADA");
-    Serial.println("Caixa Fechada");
+    // Solo ÚMIDO -> Desligar Bomba
+    digitalWrite(PINO_BOMBA, HIGH); // Desliga o Relé
+    client.publish(topico_status, "SOLO_UMIDO_BOMBA_DESLIGADA");
+    Serial.println("Solo Umido - Monitorando.");
   }
   
-  delay(2000); // Espera 2 segundos antes de ler de novo
+  delay(5000); // Espera 5 segundos
 }
